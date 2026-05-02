@@ -109,9 +109,11 @@ class XGBoostPredictor:
             n_estimators=300, max_depth=6, n_jobs=-1,
         )
 
-        # For inference only, we rely on the main model + fixed spread
+        # For inference only, we rely on the main model + fixed spread.
+        # TODO: Train quantile models (XGBRegressor with reg:quantileerror
+        #       objective) on the same data to produce proper prediction intervals.
         preds = self.predict(X)
-        std_approx = preds * 0.15  # ±15% as placeholder until quantile models are trained
+        std_approx = preds * 0.15  # ±15% placeholder until quantile models are trained
         return preds, preds - 1.96 * std_approx, preds + 1.96 * std_approx
 
 
@@ -307,25 +309,17 @@ class DelayPredictor:
 
     # ── Persistence ───────────────────────────────────────────
 
-    @staticmethod
-    def _sanitize_port_name(port: str) -> str:
-        """
-        Sanitise a port name for use in a file path.
-        Allows only alphanumerics, spaces, hyphens, and underscores.
-        """
-        import re
-        return re.sub(r"[^\w\s-]", "", port).replace(" ", "_").lower()
-
     def _model_path(self) -> Path:
-        origin_safe = self._sanitize_port_name(self.origin_port)
-        dest_safe = self._sanitize_port_name(self.destination_port)
-        key = f"{origin_safe}__{dest_safe}"
+        """
+        Derive a safe model file path by hashing the route key.
+        Using a SHA-256 hash ensures no user-supplied characters appear
+        in the path, eliminating path-injection risk entirely.
+        """
+        import hashlib
+        route_key = f"{self.origin_port}::{self.destination_port}"
+        safe_name = hashlib.sha256(route_key.encode()).hexdigest()
         MODEL_STORE.mkdir(parents=True, exist_ok=True)
-        # Resolve to catch any remaining traversal attempts
-        model_path = (MODEL_STORE / f"{key}.pkl").resolve()
-        if not str(model_path).startswith(str(MODEL_STORE.resolve())):
-            raise ValueError(f"Unsafe model path detected: {model_path}")
-        return model_path
+        return MODEL_STORE / f"{safe_name}.pkl"
 
     def save(self) -> None:
         path = self._model_path()

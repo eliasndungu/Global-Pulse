@@ -1,5 +1,3 @@
-version: "3.9"
-
 # ──────────────────────────────────────────────────────────────
 #  Global-Pulse – Docker Compose
 #  Services: TimescaleDB, Redis, Airflow (webserver + scheduler
