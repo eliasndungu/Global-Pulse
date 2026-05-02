@@ -5,7 +5,6 @@ Global-Pulse – FastAPI Application Entry Point
 from __future__ import annotations
 
 import logging
-
 import os
 
 import structlog
