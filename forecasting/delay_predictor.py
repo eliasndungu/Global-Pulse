@@ -61,7 +61,7 @@ class XGBoostPredictor:
     Target variable: actual_delay_days (days late relative to schedule).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, feature_cols: list[str] | None = None) -> None:
         from xgboost import XGBRegressor
         self._model = XGBRegressor(
             n_estimators=300,
@@ -72,14 +72,22 @@ class XGBoostPredictor:
             random_state=42,
             n_jobs=-1,
         )
-        self._feature_cols: list[str] = []
+        self._feature_cols: list[str] = feature_cols or []
+
+    @property
+    def feature_cols(self) -> list[str]:
+        return self._feature_cols
+
+    @feature_cols.setter
+    def feature_cols(self, cols: list[str]) -> None:
+        self._feature_cols = cols
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
-        self._feature_cols = list(X.columns)
+        self.feature_cols = list(X.columns)
         self._model.fit(X.values, y.values)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        return self._model.predict(X[self._feature_cols].values)
+        return self._model.predict(X[self.feature_cols].values)
 
     def predict_with_intervals(
         self, X: pd.DataFrame, alpha: float = 0.1
@@ -212,7 +220,7 @@ class DelayPredictor:
         y = feature_df["avg_transit_days"].fillna(0)
 
         self._xgb = XGBoostPredictor()
-        self._xgb._feature_cols = feature_cols
+        self._xgb.feature_cols = feature_cols
         self._xgb.fit(X, y)
         logger.info("XGBoost trained for %s → %s", self.origin_port, self.destination_port)
 
@@ -264,7 +272,7 @@ class DelayPredictor:
                 fr = feature_row.copy()
                 fr["timestamp"] = target_date
                 fr = add_time_features(fr, ts_col="timestamp")
-                feat_cols = self._xgb._feature_cols
+                feat_cols = self._xgb.feature_cols
                 fr_aligned = fr.reindex(columns=feat_cols, fill_value=0)
                 preds, lw, up = self._xgb.predict_with_intervals(fr_aligned)
                 xgb_pred = float(preds[0])
@@ -299,10 +307,25 @@ class DelayPredictor:
 
     # ── Persistence ───────────────────────────────────────────
 
+    @staticmethod
+    def _sanitize_port_name(port: str) -> str:
+        """
+        Sanitise a port name for use in a file path.
+        Allows only alphanumerics, spaces, hyphens, and underscores.
+        """
+        import re
+        return re.sub(r"[^\w\s-]", "", port).replace(" ", "_").lower()
+
     def _model_path(self) -> Path:
-        key = f"{self.origin_port}__{self.destination_port}".replace(" ", "_").lower()
+        origin_safe = self._sanitize_port_name(self.origin_port)
+        dest_safe = self._sanitize_port_name(self.destination_port)
+        key = f"{origin_safe}__{dest_safe}"
         MODEL_STORE.mkdir(parents=True, exist_ok=True)
-        return MODEL_STORE / f"{key}.pkl"
+        # Resolve to catch any remaining traversal attempts
+        model_path = (MODEL_STORE / f"{key}.pkl").resolve()
+        if not str(model_path).startswith(str(MODEL_STORE.resolve())):
+            raise ValueError(f"Unsafe model path detected: {model_path}")
+        return model_path
 
     def save(self) -> None:
         path = self._model_path()

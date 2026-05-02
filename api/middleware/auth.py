@@ -80,6 +80,7 @@ def require_api_key(
         matched.last_used_at = datetime.now(timezone.utc)
         db.commit()
     except Exception:  # noqa: BLE001
+        logger.warning("Failed to update last_used_at for API key %s", matched.id, exc_info=True)
         db.rollback()
 
     customer = db.query(Customer).filter_by(id=matched.customer_id, is_active=True).first()
