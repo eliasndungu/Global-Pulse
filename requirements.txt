@@ -5,7 +5,7 @@
 # ── Web framework ─────────────────────────────────────────────
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-python-multipart==0.0.9
+python-multipart==0.0.22
 
 # ── Database ──────────────────────────────────────────────────
 psycopg2-binary==2.9.9
@@ -14,19 +14,19 @@ alembic==1.13.1
 
 # ── Apache Airflow (core + providers) ────────────────────────
 # Install separately or via constraints file for your Python/Airflow version:
-#   pip install "apache-airflow==2.9.1" --constraint \
-#     https://raw.githubusercontent.com/apache/airflow/constraints-2.9.1/constraints-3.11.txt
-apache-airflow==2.9.1
+#   pip install "apache-airflow==3.2.0" --constraint \
+#     https://raw.githubusercontent.com/apache/airflow/constraints-3.2.0/constraints-3.11.txt
+apache-airflow==3.2.0
 apache-airflow-providers-postgres==5.10.2
 apache-airflow-providers-redis==3.6.1
 apache-airflow-providers-celery==3.6.2
-apache-airflow-providers-http==4.10.1
+apache-airflow-providers-http==6.0.0
 
 # ── HTTP / feed parsing ───────────────────────────────────────
 httpx==0.27.0
 requests==2.32.3
 feedparser==6.0.11
-aiohttp==3.9.5
+aiohttp==3.13.3
 
 # ── Data & ML ─────────────────────────────────────────────────
 pandas==2.2.2
@@ -37,8 +37,8 @@ prophet==1.1.5
 
 # ── Auth / security ───────────────────────────────────────────
 passlib[bcrypt]==1.7.4
-python-jose[cryptography]==3.3.0
-cryptography==42.0.7
+python-jose[cryptography]==3.4.0
+cryptography==46.0.5
 
 # ── Utilities ─────────────────────────────────────────────────
 pydantic==2.7.1

@@ -87,7 +87,7 @@ with DAG(
     description="Parse maritime/trade RSS feeds and store articles",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
-    schedule_interval="@hourly",
+    schedule="@hourly",
     catchup=False,
     max_active_runs=1,
     tags=["news", "rss", "ingestion", "global-pulse"],

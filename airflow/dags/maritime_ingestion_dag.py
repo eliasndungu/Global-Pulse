@@ -114,7 +114,7 @@ with DAG(
     description="Fetch real-time AIS vessel positions and aggregate shipping metrics",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
-    schedule_interval="*/10 * * * *",
+    schedule="*/10 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["maritime", "ingestion", "global-pulse"],

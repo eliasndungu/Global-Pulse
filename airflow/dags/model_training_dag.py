@@ -210,7 +210,7 @@ with DAG(
     description="Retrain delay-forecast models for all active shipping routes",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
-    schedule_interval="0 2 * * *",   # 02:00 UTC daily
+    schedule="0 2 * * *",    # 02:00 UTC daily
     catchup=False,
     max_active_runs=1,
     tags=["ml", "forecasting", "training", "global-pulse"],

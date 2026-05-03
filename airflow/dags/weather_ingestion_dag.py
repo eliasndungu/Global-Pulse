@@ -88,7 +88,7 @@ with DAG(
     description="Fetch current weather for major world ports",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
-    schedule_interval="*/30 * * * *",
+    schedule="*/30 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["weather", "ingestion", "global-pulse"],
