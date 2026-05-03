@@ -50,7 +50,13 @@ Global-Pulse/
 │   └── dags/                   # Airflow ETL DAGs
 │       ├── maritime_ingestion_dag.py
 │       ├── weather_ingestion_dag.py
-│       └── news_ingestion_dag.py
+│       ├── news_ingestion_dag.py
+│       └── model_training_dag.py   # Daily model retraining
+├── alembic/                    # Database migration framework
+│   ├── env.py                  #   Alembic environment (reads DB URL from app config)
+│   ├── script.py.mako          #   Migration file template
+│   └── versions/
+│       └── 001_initial_schema.py   # Initial schema migration
 ├── api/                        # FastAPI REST API
 │   ├── main.py                 #   Application entry-point
 │   ├── config.py               #   Settings (pydantic-settings)
@@ -62,22 +68,29 @@ Global-Pulse/
 │       ├── maritime.py         #   Vessel positions & routes
 │       ├── weather.py          #   Weather observations
 │       ├── news.py             #   News articles
-│       └── forecasting.py      #   Delay forecast endpoint
+│       └── forecasting.py      #   Delay forecast endpoint (+ DB persistence)
 ├── db/
 │   ├── connection.py           # SQLAlchemy engine & session
 │   ├── models.py               # ORM models (all tables)
 │   ├── settings.py             # DB URL builder
 │   └── migrations/
-│       └── 001_initial_schema.sql  # TimescaleDB DDL + hypertables
+│       └── 001_initial_schema.sql  # TimescaleDB DDL + hypertables (reference)
 ├── forecasting/
 │   ├── feature_engineering.py  # Time/weather/congestion features
-│   └── delay_predictor.py      # XGBoost + Prophet dual-backend
+│   └── delay_predictor.py      # XGBoost (+ quantile intervals) + Prophet
+├── scripts/
+│   └── init_db.py              # Local dev DB initialiser + sample data seeder
 ├── tests/
 │   ├── test_adapters.py
 │   ├── test_api.py
 │   └── test_forecasting.py
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # GitHub Actions CI pipeline
+├── alembic.ini                 # Alembic configuration
 ├── docker-compose.yml          # Full stack (DB + Airflow + API)
 ├── Dockerfile                  # API service image
+├── pyproject.toml              # Project metadata, ruff, mypy, coverage config
 ├── requirements.txt
 └── .env.example                # Environment variable template
 ```
@@ -144,6 +157,24 @@ curl -s -X POST http://localhost:8000/v1/forecasting/predict \
 | `maritime_ingestion` | Every 10 min | Fetches AIS positions for 4 global regions, aggregates route metrics |
 | `weather_ingestion` | Every 30 min | Fetches weather for 10 major world ports, flags severe conditions |
 | `news_ingestion` | Hourly | Parses maritime RSS feeds, de-duplicates, stores articles |
+| `model_training` | Daily 02:00 UTC | Retrains delay-forecast models for all active routes, persists 7-day forecasts |
+
+---
+
+## Database Migrations (Alembic)
+
+Alembic manages schema evolution. To apply migrations:
+
+```bash
+# Apply all pending migrations
+alembic upgrade head
+
+# Generate a new migration from model changes
+alembic revision --autogenerate -m "add_new_column"
+
+# Rollback one revision
+alembic downgrade -1
+```
 
 ---
 
@@ -151,11 +182,30 @@ curl -s -X POST http://localhost:8000/v1/forecasting/predict \
 
 The `/v1/forecasting/predict` endpoint uses a **dual-backend ensemble**:
 
-- **XGBoost** – trained on engineered features (cyclic time, weather, congestion score) for point estimates with confidence intervals
-- **Prophet** – captures yearly/weekly seasonality in historical transit times
+- **XGBoost** – trained on engineered features (cyclic time, weather, congestion score) for point estimates with **proper quantile-regression confidence intervals** (5th / 95th percentile, no fixed-percentage approximation)
+- **Prophet** – captures yearly/weekly seasonality in historical transit times (optional dependency)
 
 Both models are trained on-demand if no pre-trained file exists, then saved to
-`MODEL_STORE_PATH` for fast subsequent inference.
+`MODEL_STORE_PATH` for fast subsequent inference.  The `model_training` Airflow DAG
+refreshes all models daily and pre-populates the `delay_forecasts` table.
+
+Forecast results are also **persisted to the `delay_forecasts` table** on every
+API call so that historical forecast accuracy can be tracked over time.
+
+---
+
+## Local Development
+
+```bash
+# Initialise DB tables + seed sample data
+python scripts/init_db.py --seed
+
+# Start API server
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Apply database migrations with Alembic
+alembic upgrade head
+```
 
 ---
 
@@ -173,8 +223,14 @@ All data endpoints require an `X-API-Key` header.  Keys are:
 ## Running Tests
 
 ```bash
-pip install pytest pytest-asyncio httpx feedparser
+pip install pytest pytest-asyncio httpx feedparser xgboost
 pytest tests/ -v
+```
+
+Coverage report:
+
+```bash
+pytest tests/ --cov=adapters --cov=api --cov=forecasting --cov-report=term-missing
 ```
 
 ---
@@ -191,3 +247,9 @@ See `.env.example` for the full list.  Key variables:
 | `POSTGRES_*` | TimescaleDB connection settings |
 | `API_SECRET_KEY` | JWT / HMAC secret (FastAPI) |
 | `MODEL_STORE_PATH` | Path to save trained forecast models |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed CORS origins (default: `*`) |
+
+## CI / CD
+
+GitHub Actions runs the test suite on every push and pull request targeting `main`.
+See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).

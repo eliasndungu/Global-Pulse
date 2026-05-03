@@ -7,6 +7,7 @@ Requires a valid X-API-Key header.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from api.middleware.auth import require_api_key
 from api.schemas import ForecastRequest, ForecastResponse
 from db.connection import get_db
-from db.models import Customer
+from db.models import Customer, DelayForecast
 
 router = APIRouter()
 
@@ -27,7 +28,8 @@ router = APIRouter()
     summary="Predict shipping delays for a route",
     description=(
         "Returns a day-by-day delay forecast (in days) for the specified "
-        "origin→destination shipping route over the requested horizon."
+        "origin→destination shipping route over the requested horizon. "
+        "Results are also persisted to the delay_forecasts table."
     ),
 )
 def predict_delays(
@@ -73,6 +75,25 @@ def predict_delays(
 
     forecast_points = predictor.predict(horizon_days=body.horizon_days)
 
+    # Persist forecast results to delay_forecasts table
+    now = datetime.now(timezone.utc)
+    for fp in forecast_points:
+        record = DelayForecast(
+            created_at=now,
+            origin_port=body.origin_port,
+            destination_port=body.destination_port,
+            forecast_date=fp.forecast_date,
+            predicted_delay_days=fp.predicted_delay_days,
+            confidence_lower=fp.confidence_lower,
+            confidence_upper=fp.confidence_upper,
+            model_version=fp.model_version,
+        )
+        db.add(record)
+    try:
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
     return ForecastResponse(
         origin_port=body.origin_port,
         destination_port=body.destination_port,
@@ -87,3 +108,4 @@ def predict_delays(
             for fp in forecast_points
         ],
     )
+

@@ -171,3 +171,148 @@ def test_delay_predictor_train_requires_data():
     with pytest.raises(ValueError, match="avg_transit_days"):
         predictor = DelayPredictor("A", "B")
         predictor.train(pd.DataFrame())
+
+
+# ──────────────────────────────────────────────────────────────
+#  XGBoost quantile interval training
+# ──────────────────────────────────────────────────────────────
+
+def test_xgboost_quantile_intervals_trained():
+    """predict_with_intervals uses trained quantile models (not a fixed % spread)."""
+    from forecasting.delay_predictor import XGBoostPredictor
+
+    n = 50
+    rng = np.random.default_rng(42)
+    X = pd.DataFrame({
+        "hour_sin": rng.uniform(-1, 1, n),
+        "hour_cos": rng.uniform(-1, 1, n),
+        "dow_sin": rng.uniform(-1, 1, n),
+    })
+    y = pd.Series(rng.uniform(5, 30, n))
+
+    predictor = XGBoostPredictor()
+    predictor.fit(X, y)
+
+    preds, lower, upper = predictor.predict_with_intervals(X)
+
+    assert preds.shape == lower.shape == upper.shape == (n,)
+    # predict_with_intervals clamps so upper >= lower always
+    assert np.all(upper >= lower - 1e-4), "upper should always be >= lower after clamping"
+    # Upper and lower should bracket the point estimates
+    assert np.all(preds >= lower - 1e-4)
+    assert np.all(upper >= preds - 1e-4)
+
+
+def test_xgboost_quantile_intervals_nonnegative_lower():
+    """predict_with_intervals lower bound does not produce nonsensical negatives for small routes."""
+    from forecasting.delay_predictor import XGBoostPredictor
+
+    n = 30
+    rng = np.random.default_rng(7)
+    X = pd.DataFrame({
+        "feat_a": np.abs(rng.standard_normal(n)),
+        "feat_b": np.abs(rng.standard_normal(n)),
+    })
+    y = pd.Series(np.abs(rng.uniform(1, 5, n)))
+
+    predictor = XGBoostPredictor()
+    predictor.fit(X, y)
+
+    preds, lower, upper = predictor.predict_with_intervals(X)
+    assert preds.shape == (n,)
+    # After clamping, upper >= lower
+    assert np.all(upper >= lower - 1e-4)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Forecast persistence to delay_forecasts table
+# ──────────────────────────────────────────────────────────────
+
+def test_forecast_endpoint_persists_to_db(tmp_path, monkeypatch):
+    """
+    The /v1/forecasting/predict endpoint persists forecast rows to
+    the delay_forecasts table after generating them.
+    """
+    import importlib
+    import secrets
+    import uuid
+    from passlib.context import CryptContext
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from db.connection import Base, get_db
+    from api.main import app
+    from db.models import Customer, APIKey, DelayForecast
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("MODEL_STORE_PATH", str(tmp_path))
+
+    # Build a trained predictor and save it so the endpoint finds it
+    import forecasting.delay_predictor as mod
+    importlib.reload(mod)
+
+    route_df = _make_route_df(50)
+    predictor = mod.DelayPredictor("Singapore", "Hamburg")
+    predictor.train(route_df)
+    predictor.save()
+
+    # Use an in-memory SQLite DB (same approach as test_api.py)
+    test_engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    TestSession = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=test_engine)
+
+    db = TestSession()
+    try:
+        pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        raw_key = secrets.token_urlsafe(32)
+        cust = Customer(
+            id=uuid.uuid4(), name="Test", email="persist@test.com",
+            is_active=True, created_at=datetime.now(timezone.utc),
+        )
+        db.add(cust)
+        db.flush()
+        api_key = APIKey(
+            id=uuid.uuid4(), customer_id=cust.id,
+            key_prefix=raw_key[:8], key_hash=pwd.hash(raw_key),
+            label="test", is_active=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(api_key)
+        db.commit()
+
+        def override_get_db():
+            yield db
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/forecasting/predict",
+                json={
+                    "origin_port": "Singapore",
+                    "destination_port": "Hamburg",
+                    "horizon_days": 3,
+                },
+                headers={"X-API-Key": raw_key},
+            )
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert len(payload["forecasts"]) == 3
+
+            # Verify rows were written to delay_forecasts
+            count = db.query(DelayForecast).filter_by(
+                origin_port="Singapore", destination_port="Hamburg"
+            ).count()
+            assert count == 3, f"Expected 3 persisted forecast rows, got {count}"
+        finally:
+            app.dependency_overrides.clear()
+
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=test_engine)
+

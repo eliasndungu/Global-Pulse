@@ -59,11 +59,21 @@ class XGBoostPredictor:
     """
     Trains an XGBoost regressor on historical route data.
     Target variable: actual_delay_days (days late relative to schedule).
+
+    Three models are trained simultaneously:
+    * ``_model``       – point-estimate regressor (``reg:squarederror``)
+    * ``_lower_model`` – lower quantile regressor (``reg:quantileerror``, q=alpha/2)
+    * ``_upper_model`` – upper quantile regressor (``reg:quantileerror``, q=1-alpha/2)
+
+    This allows :meth:`predict_with_intervals` to return proper prediction
+    intervals without relying on a fixed-percentage approximation.
     """
+
+    _DEFAULT_ALPHA = 0.1  # 90 % prediction interval
 
     def __init__(self, feature_cols: list[str] | None = None) -> None:
         from xgboost import XGBRegressor
-        self._model = XGBRegressor(
+        _shared_params: dict[str, Any] = dict(
             n_estimators=300,
             max_depth=6,
             learning_rate=0.05,
@@ -71,6 +81,17 @@ class XGBoostPredictor:
             colsample_bytree=0.8,
             random_state=42,
             n_jobs=-1,
+        )
+        self._model = XGBRegressor(**_shared_params)
+        self._lower_model = XGBRegressor(
+            objective="reg:quantileerror",
+            quantile_alpha=self._DEFAULT_ALPHA / 2,
+            **_shared_params,
+        )
+        self._upper_model = XGBRegressor(
+            objective="reg:quantileerror",
+            quantile_alpha=1 - self._DEFAULT_ALPHA / 2,
+            **_shared_params,
         )
         self._feature_cols: list[str] = feature_cols or []
 
@@ -83,38 +104,47 @@ class XGBoostPredictor:
         self._feature_cols = cols
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
+        """Fit point-estimate and quantile models on the same training set."""
         self.feature_cols = list(X.columns)
-        self._model.fit(X.values, y.values)
+        X_arr = X.values
+        y_arr = y.values
+        self._model.fit(X_arr, y_arr)
+        self._lower_model.fit(X_arr, y_arr)
+        self._upper_model.fit(X_arr, y_arr)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         return self._model.predict(X[self.feature_cols].values)
 
     def predict_with_intervals(
-        self, X: pd.DataFrame, alpha: float = 0.1
+        self, X: pd.DataFrame, alpha: float | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Return point prediction + approximate confidence bounds using
-        quantile regression trees from XGBoost.
+        Return ``(point_pred, lower_bound, upper_bound)`` using the trained
+        quantile regression models.
+
+        Args:
+            X:     Feature DataFrame.
+            alpha: Ignored (reserved for future per-call quantile tuning).
+                   The quantile level is fixed at training time via
+                   ``_DEFAULT_ALPHA``.
+
+        Notes:
+            XGBoost quantile models can exhibit "quantile crossing" on
+            individual samples (lower > upper).  We resolve this by sorting
+            the two quantile predictions so that lower ≤ point ≤ upper.
         """
-        from xgboost import XGBRegressor
+        X_aligned = X[self.feature_cols].values
+        preds = self._model.predict(X_aligned)
+        raw_lower = self._lower_model.predict(X_aligned)
+        raw_upper = self._upper_model.predict(X_aligned)
 
-        lower_model = XGBRegressor(
-            objective="reg:quantileerror",
-            quantile_alpha=alpha / 2,
-            n_estimators=300, max_depth=6, n_jobs=-1,
-        )
-        upper_model = XGBRegressor(
-            objective="reg:quantileerror",
-            quantile_alpha=1 - alpha / 2,
-            n_estimators=300, max_depth=6, n_jobs=-1,
-        )
+        # Resolve quantile crossing: ensure lower ≤ preds ≤ upper
+        lower = np.minimum(raw_lower, raw_upper)
+        upper = np.maximum(raw_lower, raw_upper)
+        lower = np.minimum(lower, preds)
+        upper = np.maximum(upper, preds)
 
-        # For inference only, we rely on the main model + fixed spread.
-        # TODO: Train quantile models (XGBRegressor with reg:quantileerror
-        #       objective) on the same data to produce proper prediction intervals.
-        preds = self.predict(X)
-        std_approx = preds * 0.15  # ±15% placeholder until quantile models are trained
-        return preds, preds - 1.96 * std_approx, preds + 1.96 * std_approx
+        return preds, lower, upper
 
 
 # ──────────────────────────────────────────────────────────────
