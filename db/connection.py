@@ -21,13 +21,16 @@ from db.settings import get_db_url
 
 def _build_engine():
     url = get_db_url()
-    engine = create_engine(
-        url,
-        pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
-        echo=bool(os.getenv("SQLALCHEMY_ECHO", "")),
-    )
+    kwargs: dict = {
+        "pool_pre_ping": True,
+        "echo": bool(os.getenv("SQLALCHEMY_ECHO", "")),
+    }
+    # pool_size / max_overflow are only valid for the default QueuePool;
+    # SQLite (used in tests) uses NullPool/StaticPool and does not accept them.
+    if not url.startswith("sqlite"):
+        kwargs["pool_size"] = 10
+        kwargs["max_overflow"] = 20
+    engine = create_engine(url, **kwargs)
     return engine
 
 
