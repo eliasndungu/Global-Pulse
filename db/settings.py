@@ -9,7 +9,16 @@ import os
 
 
 def get_db_url() -> str:
-    """Return a SQLAlchemy-compatible connection URL from env vars."""
+    """Return a SQLAlchemy-compatible connection URL from env vars.
+
+    Checks ``DATABASE_URL`` first so that test/CI environments can override
+    the default PostgreSQL connection without having psycopg2 installed.
+    Falls back to assembling a ``postgresql+psycopg2`` URL from the individual
+    ``POSTGRES_*`` variables.
+    """
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return url
     user = os.getenv("POSTGRES_USER", "globalpulse")
     password = os.getenv("POSTGRES_PASSWORD", "changeme")
     host = os.getenv("POSTGRES_HOST", "localhost")
