@@ -1,0 +1,30 @@
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+*.whl
+.venv/
+venv/
+env/
+.env
+*.log
+
+# ── Model store (large binary files) ─────────────────────────
+model_store/
+/app/model_store/
+
+# ── Airflow runtime ───────────────────────────────────────────
+airflow/logs/
+
+# ── IDE / OS ──────────────────────────────────────────────────
+.idea/
+.vscode/
+*.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
