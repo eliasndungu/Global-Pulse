@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main", "master"]
 
+# Minimal permissions for the GITHUB_TOKEN
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})

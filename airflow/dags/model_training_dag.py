@@ -168,7 +168,7 @@ def persist_forecasts(**context) -> int:
 
         try:
             points = predictor.predict(horizon_days=7)
-            now = datetime.utcnow().replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
 
             with db_session() as session:
                 # Remove stale future forecasts for this route
